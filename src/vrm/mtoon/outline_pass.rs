@@ -190,13 +190,9 @@ fn queue_outlines(
                 .material_key
                 .to_key::<MToonMaterialKey>();
 
-            // Skip outline for double-sided meshes (cull_mode: None).
-            // The inverted-hull outline technique assumes back-faces are invisible
-            // in the main pass; on double-sided meshes the inflated back-faces
-            // overwrite correctly-rendered pixels with the outline color.
-            if !mtoon_key.intersects(MToonMaterialKey::CULL_FRONT | MToonMaterialKey::CULL_BACK) {
-                continue;
-            }
+            // Double-sided meshes get outlines too, as in the MToon 1.0 spec, UniVRM and
+            // three-vrm: the outline pass culls front faces itself, so the inflated hull only
+            // shows where it sticks out past the mesh.
 
             let outline_key = OutlinePipelineKey {
                 mesh_key,

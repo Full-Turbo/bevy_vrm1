@@ -182,9 +182,11 @@ fn calc_mtoon_lighting_shading(
     light_id: u32,
 ) -> f32 {
     let light = &lights.directional_lights[light_id];
-    let NdotL = saturate(dot(input.world_normal, (*light).direction_to_light));
+    // MToon 1.0: the shading input is N·L over its full [-1, 1] range. Clamping it to [0, 1]
+    // put every surface facing away from the light at 0, i.e. half lit before shift/toony.
+    let NdotL = clamp(dot(input.world_normal, (*light).direction_to_light), -1.0, 1.0);
     let shade_shift = calc_mtoon_lighting_reflectance_shading_shift(input);
-    let shade_input = mix(-1., 1., mtoon_linearstep(-1., 1., NdotL));
+    let shade_input = NdotL;
     let view_z = dot(vec4<f32>(
         view.view_from_world[0].z,
         view.view_from_world[1].z,

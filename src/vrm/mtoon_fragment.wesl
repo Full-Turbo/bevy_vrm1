@@ -1,3 +1,4 @@
+import bevy_render::maths::PI;
 import bevy_pbr::render::{
     forward_io::{
         VertexOutput,
@@ -157,7 +158,7 @@ fn apply_mtoon_lighting(in: MToonInput) -> vec4<f32> {
     let direct = apply_directional_lights(in);
     let in_direct = apply_global_illumination(in);
     let emissive = apply_emissive_light(in);
-    let rim = apply_rim_lighting(in.pbr, in.uv, direct, in_direct);
+    let rim = apply_rim_lighting(in.pbr, in.uv, rim_light_irradiance());
     return vec4<f32>(direct + in_direct + emissive + rim, in.lit_color.a);
 }
 
@@ -262,7 +263,19 @@ fn apply_emissive_light(in: MToonInput) -> vec3<f32> {
     }
 }
 
-fn apply_rim_lighting(in: PbrInput, uv: vec2<f32>, direct_light: vec3<f32>, in_direct: vec3<f32>) -> vec3<f32>{
+/// The light arriving at the surface, for `rimLightingMixFactor` (MToon 1.0: rim is multiplied by
+/// mix(1, direct + indirect light, factor)). Directional light colour already carries its
+/// illuminance; / π turns it into the same scale as three-vrm and UniVRM (1.0 for a white light
+/// of intensity π at exposure 1).
+fn rim_light_irradiance() -> vec3<f32> {
+    var light = vec3(0.);
+    for (var i: u32 = 0u; i < lights.n_directional_lights; i = i + 1u) {
+        light += lights.directional_lights[i].color.rgb;
+    }
+    return view.exposure * (light / PI + lights.ambient_color.rgb);
+}
+
+fn apply_rim_lighting(in: PbrInput, uv: vec2<f32>, light: vec3<f32>) -> vec3<f32>{
     var rim = vec3(0.);
     let world_view_x = normalize(vec3<f32>(in.V.z, 0.0, -in.V.x));
     let world_view_y = cross(in.V, world_view_x);
@@ -278,7 +291,7 @@ fn apply_rim_lighting(in: PbrInput, uv: vec2<f32>, direct_light: vec3<f32>, in_d
     if((material.flags & RIM_MAP_TEXTURE) != 0u) {
         rim *= textureSampleBias(rim_multiply_texture, rim_multiply_sampler, uv, view.mip_bias).rgb;
     }
-    rim *= mix(vec3(1.0), direct_light + in_direct, material.rim_lighting_mix_factor);
+    rim *= mix(vec3(1.0), light, material.rim_lighting_mix_factor);
     return rim;
 }
 

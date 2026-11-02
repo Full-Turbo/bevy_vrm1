@@ -1,7 +1,6 @@
 //! - [`look at specification(en)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.md)
 //! - [`look at specification(ja)`](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/lookAt.ja.md)
 
-use crate::error::vrm_warn;
 use crate::prelude::*;
 use crate::system_set::VrmSystemSets;
 use bevy::app::{App, Plugin};
@@ -63,12 +62,14 @@ impl Plugin for LookAtPlugin {
 
 pub(crate) fn track_looking_target(
     mut commands: Commands,
-    vrms: Query<(
+    mut vrms: Query<(
         &LookAt,
         &LookAtProperties,
         &HeadBoneEntity,
-        &LeftEyeBoneEntity,
-        &RightEyeBoneEntity,
+        // Expression lookAt models (eyes moved by blend shapes) need not have eye bones.
+        Option<&LeftEyeBoneEntity>,
+        Option<&RightEyeBoneEntity>,
+        Option<&mut VrmExpressionWeights>,
     )>,
     transforms: Query<&Transform>,
     global_transforms: Query<&GlobalTransform>,
@@ -76,8 +77,8 @@ pub(crate) fn track_looking_target(
     windows: Query<(Entity, &Window)>,
     cameras: Cameras,
 ) {
-    vrms.iter()
-        .for_each(|(look_at, properties, head, left_eye, right_eye)| {
+    vrms.iter_mut().for_each(
+        |(look_at, properties, head, left_eye, right_eye, expression_weights)| {
             let Ok(head_gtf) = global_transforms.get(head.0) else {
                 return;
             };
@@ -109,6 +110,9 @@ pub(crate) fn track_looking_target(
 
             match properties.r#type {
                 LookAtType::Bone => {
+                    let (Some(left_eye), Some(right_eye)) = (left_eye, right_eye) else {
+                        return;
+                    };
                     apply_bone(
                         &mut commands,
                         &transforms,
@@ -121,12 +125,48 @@ pub(crate) fn track_looking_target(
                     );
                 }
                 LookAtType::Expression => {
-                    bevy::utils::once!(vrm_warn!(
-                        "Expression look at is not supported yet, skipping gaze control"
-                    ));
+                    // Runs before the expression pass (VrmSystemSets::Expressions), which turns
+                    // these weights into morph targets like any other expression.
+                    if let Some(mut weights) = expression_weights {
+                        for (name, weight) in look_at_expression_weights(properties, yaw, pitch) {
+                            weights.0.insert(name.to_string(), weight);
+                        }
+                    }
                 }
             }
-        });
+        },
+    );
+}
+
+/// VRMC_vrm-1.0 lookAt type `expression`: yaw drives `lookLeft` / `lookRight` through
+/// `rangeMapHorizontalOuter`, pitch drives `lookUp` / `lookDown` through the vertical maps.
+/// Positive yaw is towards the avatar's left, negative pitch is up (see [`calc_yaw_pitch`]);
+/// the same mapping as three-vrm's `VRMLookAtExpressionApplier`.
+fn look_at_expression_weights(
+    properties: &LookAtProperties,
+    yaw: f32,
+    pitch: f32,
+) -> [(&'static str, f32); 4] {
+    let map = |range: RangeMap, degrees: f32| {
+        range.output_scale * (degrees / range.input_max_value).clamp(0.0, 1.0)
+    };
+    let outer = properties.range_map_horizontal_outer;
+    let (left, right) = if yaw < 0.0 {
+        (0.0, map(outer, -yaw))
+    } else {
+        (map(outer, yaw), 0.0)
+    };
+    let (up, down) = if pitch < 0.0 {
+        (map(properties.range_map_vertical_up, -pitch), 0.0)
+    } else {
+        (0.0, map(properties.range_map_vertical_down, pitch))
+    };
+    [
+        ("lookLeft", left),
+        ("lookRight", right),
+        ("lookUp", up),
+        ("lookDown", down),
+    ]
 }
 
 fn apply_bone(
@@ -388,5 +428,28 @@ mod tests {
             Transform::default()
         );
         success!()
+    }
+
+    #[test]
+    fn expression_look_at_maps_yaw_and_pitch_to_look_expressions() {
+        let mut properties = expression_properties();
+        properties.range_map_horizontal_outer = RangeMap {
+            input_max_value: 90.0,
+            output_scale: 1.0,
+        };
+        properties.range_map_vertical_up = RangeMap {
+            input_max_value: 45.0,
+            output_scale: 1.0,
+        };
+        // 45° to the avatar's left and 9° up: lookLeft 0.5, lookUp 0.2, the opposites 0.
+        let weights = look_at_expression_weights(&properties, 45.0, -9.0);
+        let get = |name| weights.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert!((get("lookLeft") - 0.5).abs() < 1e-6);
+        assert_eq!(get("lookRight"), 0.0);
+        assert!((get("lookUp") - 0.2).abs() < 1e-6);
+        assert_eq!(get("lookDown"), 0.0);
+        // Past inputMaxValue the weight saturates at outputScale.
+        let far = look_at_expression_weights(&properties, -120.0, 0.0);
+        assert_eq!(far.iter().find(|(n, _)| *n == "lookRight").unwrap().1, 1.0);
     }
 }

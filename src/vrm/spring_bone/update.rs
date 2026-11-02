@@ -52,7 +52,12 @@ fn update_spring_bones(
                 .map(|(_, gtf)| *gtf)
                 .unwrap_or_default();
             let parent_global_rotation = parent_gtf.to_scale_rotation_translation().1;
-            let Ok(head_global_pos) = transforms.get(joint).map(|(_, gtf)| gtf.translation())
+            // The joint's own GlobalTransform was propagated before its parent joint moved in
+            // this step; place it from the parent's freshly updated transform instead, as
+            // three-vrm and UniVRM do, so a chain doesn't lag one frame per joint.
+            let Ok(head_global_pos) = transforms
+                .get(joint)
+                .map(|(tf, _)| parent_gtf.transform_point(tf.translation))
             else {
                 continue;
             };

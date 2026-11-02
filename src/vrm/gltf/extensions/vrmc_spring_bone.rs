@@ -151,8 +151,28 @@ impl ColliderShape {
                         + (pos_from_collider - head_global_pos).normalize() * bone_length;
                 }
             }
-            Self::Capsule(_) => {
-                //TODO: Not supported yet
+            Self::Capsule(capsule) => {
+                // VRMC_springBone-1.0: the closest point to the tail on the offset → tail segment
+                // is the centre of the sphere it collides with (three-vrm, UniVRM).
+                let head = collider.transform_point(Vec3::from(capsule.offset));
+                let segment = collider.transform_point(Vec3::from(capsule.tail)) - head;
+                let along = segment.dot(*next_tail - head);
+                let length_squared = segment.length_squared();
+                let closest = if along <= 0.0 || length_squared == 0.0 {
+                    head
+                } else if along >= length_squared {
+                    head + segment
+                } else {
+                    head + segment * (along / length_squared)
+                };
+                let r = joint_radius + capsule.radius * max_collider_scale;
+                let delta = *next_tail - closest;
+                let distance_squared = delta.length_squared();
+                if distance_squared > 0.0 && distance_squared <= r * r {
+                    let pos_from_collider = closest + delta.normalize() * r;
+                    *next_tail = head_global_pos
+                        + (pos_from_collider - head_global_pos).normalize() * bone_length;
+                }
             }
         }
     }
@@ -292,4 +312,45 @@ mod tests {
 
         success!()
     }
+
+    /// A capsule along +X from x = 0 to x = 1, radius 0.1, at the origin.
+    fn capsule() -> ColliderShape {
+        ColliderShape::Capsule(Capsule {
+            offset: [0.0, 0.0, 0.0],
+            radius: 0.1,
+            tail: [1.0, 0.0, 0.0],
+        })
+    }
+
+    #[test]
+    fn capsule_pushes_a_tail_out_of_its_middle() {
+        use bevy::prelude::{GlobalTransform, Vec3};
+        // Joint at (0.5, 1, 0); the tail at (0.5, 0.05, 0) is inside. It is pushed to the surface
+        // point (0.5, 0.1, 0) and re-normalised to the bone length from the joint (0.9 here, so
+        // the surface point is exactly reachable).
+        let head = Vec3::new(0.5, 1.0, 0.0);
+        let mut tail = Vec3::new(0.5, 0.05, 0.0);
+        capsule().apply_collision(&mut tail, &GlobalTransform::IDENTITY, head, 0.0, 0.9);
+        assert!(tail.distance(Vec3::new(0.5, 0.1, 0.0)) < 1e-5, "on the surface: {tail}");
+    }
+
+    #[test]
+    fn capsule_uses_its_end_cap_past_the_tail() {
+        use bevy::prelude::{GlobalTransform, Vec3};
+        // Beyond x = 1 the nearest point is the tail cap's centre (1, 0, 0).
+        let head = Vec3::new(1.5, 0.0, 0.0);
+        let mut tail = Vec3::new(1.05, 0.0, 0.0);
+        capsule().apply_collision(&mut tail, &GlobalTransform::IDENTITY, head, 0.0, 0.4);
+        assert!(tail.distance(Vec3::new(1.1, 0.0, 0.0)) < 1e-5, "on the end cap: {tail}");
+    }
+
+    #[test]
+    fn capsule_leaves_a_tail_outside_alone() {
+        use bevy::prelude::{GlobalTransform, Vec3};
+        let head = Vec3::new(0.5, 1.0, 0.0);
+        let mut tail = Vec3::new(0.5, 0.5, 0.0);
+        capsule().apply_collision(&mut tail, &GlobalTransform::IDENTITY, head, 0.0, 0.5);
+        assert_eq!(tail, Vec3::new(0.5, 0.5, 0.0));
+    }
+
 }

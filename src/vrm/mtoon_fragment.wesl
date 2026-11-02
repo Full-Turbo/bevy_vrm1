@@ -264,7 +264,8 @@ fn apply_rim_lighting(in: PbrInput, uv: vec2<f32>, direct_light: vec3<f32>, in_d
     var rim = vec3(0.);
     let world_view_x = normalize(vec3<f32>(in.V.z, 0.0, -in.V.x));
     let world_view_y = cross(in.V, world_view_x);
-    let matcap_uv = vec2<f32>(dot(world_view_x, in.N), dot(world_view_y, in.N)) * 0.495 + 0.5;
+    // UV origin is the top-left texel, so a normal pointing up must sample the top: v = 0.5 - y.
+    let matcap_uv = vec2<f32>(dot(world_view_x, in.N), -dot(world_view_y, in.N)) * 0.495 + 0.5;
     let epsilon = 0.0001;
     if((material.flags & MATCAP_TEXTURE) != 0u) {
         rim = material.mat_cap_color.rgb * textureSampleBias(matcap_texture, matcap_sampler, matcap_uv, view.mip_bias).rgb;
